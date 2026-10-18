@@ -358,115 +358,125 @@ def handle_incoming_messages():
                     if contacts:
                         sender_name = contacts[0].get("profile", {}).get("name", "there")
 
-                    msg_type = msg.get("type")
+                    msg_type = msg.get("type", "")
                     logger.info(f"Processing message from {sender_phone}, type: {msg_type}")
 
-                    # 1. Interactive Button Reply
+                    btn_id = ""
+                    button_text = ""
+                    text_body = ""
+
                     if msg_type == "interactive":
                         interactive = msg.get("interactive", {})
-                        btn_id = ""
                         if interactive.get("type") == "button_reply":
                             btn_id = interactive.get("button_reply", {}).get("id", "")
-                        
-                        logger.info(f"Interactive button pressed: {btn_id}")
-
-                        # Option A: User clicked "Pay Online Save 15%"
-                        if "btn_pay" in btn_id:
-                            parts = btn_id.split("_")
-                            original_cod = 349
-                            order_ref = "ZEN-1001"
-                            if len(parts) >= 4:
-                                order_ref = f"ZEN-{parts[2]}"
-                                try:
-                                    original_cod = int(parts[3])
-                                except:
-                                    original_cod = 349
-
-                            rzp_link, payable_amt, saved_amt = create_razorpay_payment_link(
-                                original_amount_inr=original_cod,
-                                customer_name=sender_name,
-                                customer_phone=sender_phone,
-                                order_ref=order_ref,
-                                discount_pct=15
-                            )
-
-                            reply = (
-                                f"🎉 *Fantastic choice, {sender_name}!* ⚡\n\n"
-                                f"You have unlocked *FLAT 15% Instant Savings*!\n"
-                                f"• Original COD Price: ~₹{original_cod}~\n"
-                                f"• *Discounted Amount:* ₹{payable_amt} *(You save ₹{saved_amt}!)*\n\n"
-                                f"👉 *Tap below to pay securely via Google Pay / PhonePe / Paytm / UPI:*\n"
-                                f"🔗 {rzp_link}\n\n"
-                                f"⏱️ *Offer validity:* 15 minutes only.\n"
-                                f"Once payment is completed, your package receives *Priority 24h Express Dispatch*! 🚀\n\n"
-                                f"─────────────────\n"
-                                f"✨ *Thank you for choosing Zenlora!*\n"
-                                f"I hope your day goes amazing and filled with joy! 😊\n"
-                                f"— *Team Zenlora* 🛍️"
-                            )
-                            send_whatsapp_message(sender_phone, reply)
-
-                        # Option B: User clicked "Confirm COD Order"
-                        elif "btn_cod" in btn_id:
-                            reply = (
-                                f"✅ *Order Successfully Confirmed!* 📦\n\n"
-                                f"Thank you, {sender_name}! Your Cash on Delivery order is now confirmed and prioritized.\n\n"
-                                f"Our fulfillment team is packaging your item with extreme care. You will receive live tracking updates right here on WhatsApp the moment it leaves our warehouse! 🚚\n\n"
-                                f"─────────────────\n"
-                                f"✨ *Thank you for choosing Zenlora!*\n"
-                                f"We truly appreciate your trust and hope your day goes absolutely amazing! 🌟\n"
-                                f"— *Team Zenlora* 🛍️"
-                            )
-                            send_whatsapp_message(sender_phone, reply)
-
-                        # Option C: User clicked "Cancel Order"
-                        elif "btn_cancel" in btn_id:
-                            reply = (
-                                f"We completely understand, {sender_name}. 💙\n\n"
-                                f"Your order has been cancelled immediately as requested. You will NOT be contacted by any delivery executive.\n\n"
-                                f"We would love to welcome you back whenever you're ready! Here is an exclusive gift voucher just for you:\n"
-                                f"🎁 Code: *VIPZEN10* (Flat 10% OFF on your next purchase at zenlora.store)\n\n"
-                                f"─────────────────\n"
-                                f"✨ *Thank you for considering Zenlora!*\n"
-                                f"I hope your day goes wonderful and smiling! ✨\n"
-                                f"— *Team Zenlora* 🛍️"
-                            )
-                            send_whatsapp_message(sender_phone, reply)
-
-                        # Option D: User clicked "I can collect" (Availability Confirmed)
-                        elif "btn_collect" in btn_id:
-                            parts = btn_id.split("_")
-                            cod_val = "349"
-                            if len(parts) >= 4:
-                                cod_val = parts[3]
-
-                            reply = (
-                                f"🎉 *Thank you for confirming, {sender_name}!* 🚚\n\n"
-                                f"Your delivery partner has been notified that you are available to collect the order today!\n\n"
-                                f"💵 Kindly keep *₹{cod_val}* ready in cash or via UPI at doorstep.\n\n"
-                                f"📦 We hope you love your Zenlora purchase!\n\n"
-                                f"─────────────────\n"
-                                f"✨ *Thank you for choosing Zenlora!*\n"
-                                f"I hope your day goes amazing and filled with joy! 😊\n"
-                                f"— *Team Zenlora* 🛍️"
-                            )
-                            send_whatsapp_message(sender_phone, reply)
-
-                        # Option E: User clicked "Change the date" (Reschedule Request)
-                        elif "btn_resched" in btn_id:
-                            reply = (
-                                f"🗓️ *Delivery Rescheduled Successfully!* ⏱️\n\n"
-                                f"No worries at all, {sender_name}! We have updated your preference with our courier delivery partner so you don't face any inconvenience.\n\n"
-                                f"Your delivery attempt has been rescheduled for *Tomorrow*. The delivery partner will contact you prior to arrival.\n\n"
-                                f"─────────────────\n"
-                                f"✨ *Thank you for choosing Zenlora!*\n"
-                                f"I hope your day goes amazing and filled with joy! 😊\n"
-                                f"— *Team Zenlora* 🛍️"
-                            )
-                            send_whatsapp_message(sender_phone, reply)
-
-                    # 2. Text Message
+                            button_text = interactive.get("button_reply", {}).get("title", "")
+                    elif msg_type == "button":
+                        btn_obj = msg.get("button", {})
+                        btn_id = btn_obj.get("payload", "")
+                        button_text = btn_obj.get("text", "")
                     elif msg_type == "text":
+                        text_body = msg.get("text", {}).get("body", "").strip()
+
+                    action_str = f"{btn_id} {button_text} {text_body}".lower().strip()
+                    logger.info(f"Action string resolved: '{action_str}' from {sender_phone}")
+
+                    # Option 1: "I can collect" / Availability Confirmed
+                    if "collect" in action_str:
+                        cod_val = "349"
+                        parts = btn_id.split("_")
+                        if len(parts) >= 4:
+                            cod_val = parts[3]
+
+                        reply = (
+                            f"🎉 *Thank you for confirming, {sender_name}!* 🚚\n\n"
+                            f"Your delivery partner has been notified that you are available to collect the order today!\n\n"
+                            f"💵 Kindly keep *₹{cod_val}* ready in cash or via UPI at doorstep.\n\n"
+                            f"📦 We hope you love your Zenlora purchase!\n\n"
+                            f"─────────────────\n"
+                            f"✨ *Thank you for choosing Zenlora!*\n"
+                            f"I hope your day goes amazing and filled with joy! 😊\n"
+                            f"— *Team Zenlora* 🛍️"
+                        )
+                        send_whatsapp_message(sender_phone, reply)
+
+                    # Option 2: "Change the date" / Reschedule
+                    elif "resched" in action_str or "change the date" in action_str or "date" in action_str:
+                        reply = (
+                            f"🗓️ *Delivery Rescheduled Successfully!* ⏱️\n\n"
+                            f"No worries at all, {sender_name}! We have updated your preference with our courier delivery partner so you don't face any inconvenience.\n\n"
+                            f"Your delivery attempt has been rescheduled for *Tomorrow*. The delivery partner will contact you prior to arrival.\n\n"
+                            f"─────────────────\n"
+                            f"✨ *Thank you for choosing Zenlora!*\n"
+                            f"I hope your day goes amazing and filled with joy! 😊\n"
+                            f"— *Team Zenlora* 🛍️"
+                        )
+                        send_whatsapp_message(sender_phone, reply)
+
+                    # Option 3: "Pay & Save 15%"
+                    elif "btn_pay" in action_str or "pay" in action_str or "save 15" in action_str or "save" in action_str:
+                        parts = btn_id.split("_")
+                        original_cod = 349
+                        order_ref = "ZEN-1001"
+                        if len(parts) >= 4:
+                            order_ref = f"ZEN-{parts[2]}"
+                            try:
+                                original_cod = int(parts[3])
+                            except:
+                                original_cod = 349
+
+                        rzp_link, payable_amt, saved_amt = create_razorpay_payment_link(
+                            original_amount_inr=original_cod,
+                            customer_name=sender_name,
+                            customer_phone=sender_phone,
+                            order_ref=order_ref,
+                            discount_pct=15
+                        )
+
+                        reply = (
+                            f"🎉 *Fantastic choice, {sender_name}!* ⚡\n\n"
+                            f"You have unlocked *FLAT 15% Instant Savings*!\n"
+                            f"• Original COD Price: ~₹{original_cod}~\n"
+                            f"• *Discounted Amount:* ₹{payable_amt} *(You save ₹{saved_amt}!)*\n\n"
+                            f"👉 *Tap below to pay securely via Google Pay / PhonePe / Paytm / UPI:*\n"
+                            f"🔗 {rzp_link}\n\n"
+                            f"⏱️ *Offer validity:* 15 minutes only.\n"
+                            f"Once payment is completed, your package receives *Priority 24h Express Dispatch*! 🚀\n\n"
+                            f"─────────────────\n"
+                            f"✨ *Thank you for choosing Zenlora!*\n"
+                            f"I hope your day goes amazing and filled with joy! 😊\n"
+                            f"— *Team Zenlora* 🛍️"
+                        )
+                        send_whatsapp_message(sender_phone, reply)
+
+                    # Option 4: "Confirm COD"
+                    elif "btn_cod" in action_str or "confirm cod" in action_str or "confirm" in action_str:
+                        reply = (
+                            f"✅ *Order Successfully Confirmed!* 📦\n\n"
+                            f"Thank you, {sender_name}! Your Cash on Delivery order is now confirmed and prioritized.\n\n"
+                            f"Our fulfillment team is packaging your item with extreme care. You will receive live tracking updates right here on WhatsApp the moment it leaves our warehouse! 🚚\n\n"
+                            f"─────────────────\n"
+                            f"✨ *Thank you for choosing Zenlora!*\n"
+                            f"We truly appreciate your trust and hope your day goes absolutely amazing! 🌟\n"
+                            f"— *Team Zenlora* 🛍️"
+                        )
+                        send_whatsapp_message(sender_phone, reply)
+
+                    # Option 5: "Cancel Order"
+                    elif "btn_cancel" in action_str or "cancel" in action_str:
+                        reply = (
+                            f"We completely understand, {sender_name}. 💙\n\n"
+                            f"Your order has been cancelled immediately as requested. You will NOT be contacted by any delivery executive.\n\n"
+                            f"We would love to welcome you back whenever you're ready! Here is an exclusive gift voucher just for you:\n"
+                            f"🎁 Code: *VIPZEN10* (Flat 10% OFF on your next purchase at zenlora.store)\n\n"
+                            f"─────────────────\n"
+                            f"✨ *Thank you for considering Zenlora!*\n"
+                            f"I hope your day goes wonderful and smiling! ✨\n"
+                            f"— *Team Zenlora* 🛍️"
+                        )
+                        send_whatsapp_message(sender_phone, reply)
+
+                    # Option 6: General Text / Store Support
+                    else:
                         reply = (
                             f"Hello {sender_name}! 👋\n\n"
                             f"Thank you for contacting *Zenlora Store Support*.\n"
