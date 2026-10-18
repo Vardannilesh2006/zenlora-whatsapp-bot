@@ -123,6 +123,77 @@ def send_interactive_order_confirmation(to_phone, customer_name, order_id, produ
         logger.error(f"Error triggering order WhatsApp: {e}")
         return None
 
+def send_interactive_ofd_check(to_phone, customer_name, order_id, product_name, cod_amount, contact_phone="02242567777", pin="159"):
+    """Sends Flipkart Saathi-style Out For Delivery (OFD) Availability Check to reduce RTO."""
+    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    clean_phone = str(to_phone).replace("+", "").replace(" ", "").replace("-", "")
+    if len(clean_phone) == 10:
+        clean_phone = f"91{clean_phone}"
+
+    cod_val = int(cod_amount)
+
+    body_text = (
+        f"Your *zenlora.store* order is out for delivery today. 🚚\n\n"
+        f"📦 *Item:* {product_name}\n"
+        f"🔖 *Order:* #ZEN-{order_id}\n\n"
+        f"💵 Kindly pay *₹{cod_val}* for your cash on delivery order.\n\n"
+        f"To help us deliver on time, please confirm you can collect the order today between *9 am - 8 pm*.\n\n"
+        f"📞 *Delivery Helpline:* {contact_phone}\n"
+        f"🔐 *Security PIN:* {pin}\n\n"
+        f"─────────────────\n"
+        f"✨ Zenlora | zenlora.store"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": clean_phone,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {
+                "type": "text",
+                "text": f"Availability Check: Order #{order_id}"
+            },
+            "body": {
+                "text": body_text
+            },
+            "footer": {
+                "text": "Thank you for choosing Zenlora!"
+            },
+            "action": {
+                "buttons": [
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": f"btn_collect_{order_id}_{cod_val}",
+                            "title": "📦 I can collect"
+                        }
+                    },
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": f"btn_resched_{order_id}_{cod_val}",
+                            "title": "📅 Change the date"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        logger.info(f"Trigger OFD WhatsApp Status: {response.status_code}, Resp: {response.text}")
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error triggering OFD WhatsApp: {e}")
+        return None
+
 def create_razorpay_payment_link(original_amount_inr, customer_name, customer_phone, order_ref="ZEN-1001", discount_pct=15):
     """Creates a 1-tap dynamic payment link via Razorpay API with exact 15% discount applied"""
     try:
@@ -202,6 +273,39 @@ def handle_store_order():
 
     except Exception as e:
         logger.error(f"Error processing store order: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/ofd-webhook", methods=["POST"])
+def handle_ofd_trigger():
+    """Triggered when an order is Out For Delivery to check customer availability and reduce RTO"""
+    try:
+        data = request.get_json(force=True)
+        logger.info(f"Out For Delivery Trigger Received: {data}")
+
+        customer_name = data.get("customer_name", "Valued Customer")
+        phone = data.get("phone")
+        order_id = data.get("order_id", "1001")
+        product_name = data.get("product_name", "Zenlora Order")
+        amount = data.get("amount", 349)
+        pin = data.get("pin", "159")
+        helpline = data.get("helpline", "02242567777")
+
+        if not phone:
+            return jsonify({"status": "error", "message": "Phone number is required"}), 400
+
+        result = send_interactive_ofd_check(
+            to_phone=phone,
+            customer_name=customer_name,
+            order_id=order_id,
+            product_name=product_name,
+            cod_amount=amount,
+            contact_phone=helpline,
+            pin=pin
+        )
+        return jsonify({"status": "success", "result": result}), 200
+
+    except Exception as e:
+        logger.error(f"Error processing OFD check: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/webhook", methods=["GET"])
@@ -325,6 +429,38 @@ def handle_incoming_messages():
                                 f"─────────────────\n"
                                 f"✨ *Thank you for considering Zenlora!*\n"
                                 f"I hope your day goes wonderful and smiling! ✨\n"
+                                f"— *Team Zenlora* 🛍️"
+                            )
+                            send_whatsapp_message(sender_phone, reply)
+
+                        # Option D: User clicked "I can collect" (Availability Confirmed)
+                        elif "btn_collect" in btn_id:
+                            parts = btn_id.split("_")
+                            cod_val = "349"
+                            if len(parts) >= 4:
+                                cod_val = parts[3]
+
+                            reply = (
+                                f"🎉 *Thank you for confirming, {sender_name}!* 🚚\n\n"
+                                f"Your delivery partner has been notified that you are available to collect the order today!\n\n"
+                                f"💵 Kindly keep *₹{cod_val}* ready in cash or via UPI at doorstep.\n\n"
+                                f"📦 We hope you love your Zenlora purchase!\n\n"
+                                f"─────────────────\n"
+                                f"✨ *Thank you for choosing Zenlora!*\n"
+                                f"I hope your day goes amazing and filled with joy! 😊\n"
+                                f"— *Team Zenlora* 🛍️"
+                            )
+                            send_whatsapp_message(sender_phone, reply)
+
+                        # Option E: User clicked "Change the date" (Reschedule Request)
+                        elif "btn_resched" in btn_id:
+                            reply = (
+                                f"🗓️ *Delivery Rescheduled Successfully!* ⏱️\n\n"
+                                f"No worries at all, {sender_name}! We have updated your preference with our courier delivery partner so you don't face any inconvenience.\n\n"
+                                f"Your delivery attempt has been rescheduled for *Tomorrow*. The delivery partner will contact you prior to arrival.\n\n"
+                                f"─────────────────\n"
+                                f"✨ *Thank you for choosing Zenlora!*\n"
+                                f"I hope your day goes amazing and filled with joy! 😊\n"
                                 f"— *Team Zenlora* 🛍️"
                             )
                             send_whatsapp_message(sender_phone, reply)
