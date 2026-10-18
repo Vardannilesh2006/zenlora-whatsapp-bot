@@ -349,6 +349,49 @@ def execute_dashboard_action():
         logger.error(f"Error executing action: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/api/dashboard/orders/delete", methods=["POST"])
+def api_delete_order():
+    """Allows founder to delete an individual order"""
+    try:
+        from db import delete_order
+        req = request.get_json(force=True) or {}
+        order_ref = req.get("order_ref")
+        if not order_ref:
+            return jsonify({"status": "error", "message": "order_ref is required"}), 400
+        success = delete_order(order_ref)
+        if success:
+            return jsonify({"status": "success", "message": f"Order {order_ref} deleted successfully."}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to delete order."}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/dashboard/orders/clear", methods=["POST"])
+def api_clear_orders():
+    """Allows founder to wipe all test/demo orders completely"""
+    try:
+        from db import clear_all_orders
+        success = clear_all_orders()
+        if success:
+            return jsonify({"status": "success", "message": "All demo orders and logs have been wiped clean."}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to clear orders."}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/dashboard/orders/seed", methods=["POST"])
+def api_seed_orders():
+    """Allows founder to reload sample orders on demand"""
+    try:
+        from db import reseed_demo_orders
+        success = reseed_demo_orders()
+        if success:
+            return jsonify({"status": "success", "message": "Sample orders seeded for testing."}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to seed sample orders."}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/api/dashboard/chat/send", methods=["POST"])
 def send_admin_chat_reply():
     """Allows founder/admin to send direct WhatsApp messages from cockpit"""

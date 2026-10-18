@@ -467,3 +467,46 @@ def get_dashboard_data():
         "logs": logs,
         "conversations": conversations
     }
+
+def delete_order(order_ref):
+    """Deletes an order permanently from database"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM orders WHERE order_ref = ?", (order_ref,))
+        conn.commit()
+        conn.close()
+        log_event("WARNING", "DATABASE", f"Order {order_ref} deleted by founder.")
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting order: {e}")
+        return False
+
+def clear_all_orders():
+    """Wipes all demo/test orders, conversations, and logs clean"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM orders")
+        cursor.execute("DELETE FROM messages")
+        cursor.execute("DELETE FROM system_logs")
+        conn.commit()
+        conn.close()
+        log_event("WARNING", "DATABASE", "All orders and test data wiped clean by founder.")
+        return True
+    except Exception as e:
+        logger.error(f"Error clearing all orders: {e}")
+        return False
+
+def reseed_demo_orders():
+    """Seeds realistic sample orders only when explicitly requested by founder"""
+    try:
+        conn = get_db()
+        seed_realistic_zenos_data(conn)
+        conn.close()
+        log_event("INFO", "DATABASE", "Sample orders re-seeded upon founder request.")
+        return True
+    except Exception as e:
+        logger.error(f"Error reseeding demo orders: {e}")
+        return False
+
