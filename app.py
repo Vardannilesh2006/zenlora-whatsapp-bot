@@ -4,6 +4,7 @@ import logging
 import requests
 from flask import Flask, request, jsonify
 
+# Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -40,17 +41,13 @@ def send_whatsapp_message(to_number, text_message):
         return None
 
 def send_interactive_order_confirmation(to_phone, customer_name, order_id, product_name, cod_amount):
-    """
-    Sends the High-Converting 3-Button Interactive Order Confirmation to customer.
-    Applies 15% discount calculation dynamically.
-    """
+    """Sends the 3-Button Interactive Order Confirmation to customer with 15% discount calculation."""
     url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
     
-    # Clean phone number (e.g. 9771370945 -> 919771370945)
     clean_phone = str(to_phone).replace("+", "").replace(" ", "").replace("-", "")
     if len(clean_phone) == 10:
         clean_phone = f"91{clean_phone}"
@@ -178,22 +175,9 @@ def health_check():
         "razorpay_connected": bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
     }), 200
 
-# ==========================================
-# 🚀 ENDPOINT FOR SMARTBIZ / STORE ORDERS
-# ==========================================
 @app.route("/api/order-webhook", methods=["POST"])
 def handle_store_order():
-    """
-    Call this endpoint whenever a new order is placed on zenlora.store (SmartBiz).
-    Payload:
-    {
-       "customer_name": "Rohan Sharma",
-       "phone": "9876543210",
-       "order_id": "1002",
-       "product_name": "Handcrafted Matki Kalash",
-       "amount": 349
-    }
-    """
+    """Triggered whenever a new order occurs on zenlora.store"""
     try:
         data = request.get_json(force=True)
         logger.info(f"New Order Received: {data}")
@@ -236,110 +220,134 @@ def verify_webhook():
 
 @app.route("/webhook", methods=["POST"])
 def handle_incoming_messages():
-    """Receives user interactive button clicks & replies with tailored Thank You messages and Razorpay links"""
-    data = request.get_json()
-    logger.info(f"Incoming Webhook Payload: {json.dumps(data)}")
-
+    """Ultra-resilient webhook handler for Meta events"""
     try:
-        entry = data.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
-        
-        messages = value.get("messages", [])
-        if not messages:
-            return jsonify({"status": "no_messages"}), 200
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"status": "no_data"}), 200
 
-        msg = messages[0]
-        sender_phone = msg.get("from")
-        sender_name = value.get("contacts", [{}])[0].get("profile", {}).get("name", "there")
+        logger.info(f"Incoming Webhook Raw: {json.dumps(data)}")
 
-        # 1. Interactive Button Reply
-        if msg.get("type") == "interactive":
-            interactive = msg.get("interactive", {})
-            btn_id = interactive.get("button_reply", {}).get("id", "")
+        # Meta always wraps notifications in 'entry'
+        entries = data.get("entry", [])
+        if not entries:
+            return jsonify({"status": "empty_entry"}), 200
 
-            # Option A: User clicked "Pay Online Save 15%"
-            if "btn_pay" in btn_id:
-                # Extract order amount from button ID if present (e.g. btn_pay_1001_349)
-                parts = btn_id.split("_")
-                original_cod = 349
-                order_ref = "ZEN-1001"
-                if len(parts) >= 4:
-                    order_ref = f"ZEN-{parts[2]}"
-                    try:
-                        original_cod = int(parts[3])
-                    except:
-                        original_cod = 349
+        for entry in entries:
+            changes = entry.get("changes", [])
+            for change in changes:
+                value = change.get("value", {})
+                
+                # If it's a delivery status update (sent/delivered/read), acknowledge with 200 OK
+                if "statuses" in value and "messages" not in value:
+                    continue
 
-                rzp_link, payable_amt, saved_amt = create_razorpay_payment_link(
-                    original_amount_inr=original_cod,
-                    customer_name=sender_name,
-                    customer_phone=sender_phone,
-                    order_ref=order_ref,
-                    discount_pct=15
-                )
+                messages = value.get("messages", [])
+                if not messages:
+                    continue
 
-                reply = (
-                    f"🎉 *Fantastic choice, {sender_name}!* ⚡\n\n"
-                    f"You have unlocked *FLAT 15% Instant Savings*!\n"
-                    f"• Original COD Price: ~₹{original_cod}~\n"
-                    f"• *Discounted Amount:* ₹{payable_amt} *(You save ₹{saved_amt}!)*\n\n"
-                    f"👉 *Tap below to pay securely via Google Pay / PhonePe / Paytm / UPI:*\n"
-                    f"🔗 {rzp_link}\n\n"
-                    f"⏱️ *Offer validity:* 15 minutes only.\n"
-                    f"Once payment is completed, your package receives *Priority 24h Express Dispatch*! 🚀\n\n"
-                    f"─────────────────\n"
-                    f"✨ *Thank you for choosing Zenlora!*\n"
-                    f"I hope your day goes amazing and filled with joy! 😊\n"
-                    f"— *Team Zenlora* 🛍️"
-                )
-                send_whatsapp_message(sender_phone, reply)
+                for msg in messages:
+                    sender_phone = msg.get("from")
+                    sender_name = "there"
+                    
+                    contacts = value.get("contacts", [])
+                    if contacts:
+                        sender_name = contacts[0].get("profile", {}).get("name", "there")
 
-            # Option B: User clicked "Confirm COD Order"
-            elif "btn_cod" in btn_id:
-                reply = (
-                    f"✅ *Order Successfully Confirmed!* 📦\n\n"
-                    f"Thank you, {sender_name}! Your Cash on Delivery order is now confirmed and prioritized.\n\n"
-                    f"Our fulfillment team is packaging your item with extreme care. You will receive live tracking updates right here on WhatsApp the moment it leaves our warehouse! 🚚\n\n"
-                    f"─────────────────\n"
-                    f"✨ *Thank you for choosing Zenlora!*\n"
-                    f"We truly appreciate your trust and hope your day goes absolutely amazing! 🌟\n"
-                    f"— *Team Zenlora* 🛍️"
-                )
-                send_whatsapp_message(sender_phone, reply)
+                    msg_type = msg.get("type")
+                    logger.info(f"Processing message from {sender_phone}, type: {msg_type}")
 
-            # Option C: User clicked "Cancel Order"
-            elif "btn_cancel" in btn_id:
-                reply = (
-                    f"We completely understand, {sender_name}. 💙\n\n"
-                    f"Your order has been cancelled immediately as requested. You will NOT be contacted by any delivery executive.\n\n"
-                    f"We would love to welcome you back whenever you're ready! Here is an exclusive gift voucher just for you:\n"
-                    f"🎁 Code: *VIPZEN10* (Flat 10% OFF on your next purchase at zenlora.store)\n\n"
-                    f"─────────────────\n"
-                    f"✨ *Thank you for considering Zenlora!*\n"
-                    f"I hope your day goes wonderful and smiling! ✨\n"
-                    f"— *Team Zenlora* 🛍️"
-                )
-                send_whatsapp_message(sender_phone, reply)
+                    # 1. Interactive Button Reply
+                    if msg_type == "interactive":
+                        interactive = msg.get("interactive", {})
+                        btn_id = ""
+                        if interactive.get("type") == "button_reply":
+                            btn_id = interactive.get("button_reply", {}).get("id", "")
+                        
+                        logger.info(f"Interactive button pressed: {btn_id}")
 
-        # 2. Plain Text Fallback Message
-        elif msg.get("type") == "text":
-            reply = (
-                f"Hello {sender_name}! 👋\n\n"
-                f"Thank you for contacting *Zenlora Store Support*.\n"
-                f"How can we assist you with your orders or shopping today?\n\n"
-                f"Explore our trending lifestyle collection: https://zenlora.store\n\n"
-                f"✨ *Thank you for choosing Zenlora!*\n"
-                f"I hope your day goes amazing and filled with joy! 🌟\n"
-                f"— *Team Zenlora* 🛍️"
-            )
-            send_whatsapp_message(sender_phone, reply)
+                        # Option A: User clicked "Pay Online Save 15%"
+                        if "btn_pay" in btn_id:
+                            parts = btn_id.split("_")
+                            original_cod = 349
+                            order_ref = "ZEN-1001"
+                            if len(parts) >= 4:
+                                order_ref = f"ZEN-{parts[2]}"
+                                try:
+                                    original_cod = int(parts[3])
+                                except:
+                                    original_cod = 349
+
+                            rzp_link, payable_amt, saved_amt = create_razorpay_payment_link(
+                                original_amount_inr=original_cod,
+                                customer_name=sender_name,
+                                customer_phone=sender_phone,
+                                order_ref=order_ref,
+                                discount_pct=15
+                            )
+
+                            reply = (
+                                f"🎉 *Fantastic choice, {sender_name}!* ⚡\n\n"
+                                f"You have unlocked *FLAT 15% Instant Savings*!\n"
+                                f"• Original COD Price: ~₹{original_cod}~\n"
+                                f"• *Discounted Amount:* ₹{payable_amt} *(You save ₹{saved_amt}!)*\n\n"
+                                f"👉 *Tap below to pay securely via Google Pay / PhonePe / Paytm / UPI:*\n"
+                                f"🔗 {rzp_link}\n\n"
+                                f"⏱️ *Offer validity:* 15 minutes only.\n"
+                                f"Once payment is completed, your package receives *Priority 24h Express Dispatch*! 🚀\n\n"
+                                f"─────────────────\n"
+                                f"✨ *Thank you for choosing Zenlora!*\n"
+                                f"I hope your day goes amazing and filled with joy! 😊\n"
+                                f"— *Team Zenlora* 🛍️"
+                            )
+                            send_whatsapp_message(sender_phone, reply)
+
+                        # Option B: User clicked "Confirm COD Order"
+                        elif "btn_cod" in btn_id:
+                            reply = (
+                                f"✅ *Order Successfully Confirmed!* 📦\n\n"
+                                f"Thank you, {sender_name}! Your Cash on Delivery order is now confirmed and prioritized.\n\n"
+                                f"Our fulfillment team is packaging your item with extreme care. You will receive live tracking updates right here on WhatsApp the moment it leaves our warehouse! 🚚\n\n"
+                                f"─────────────────\n"
+                                f"✨ *Thank you for choosing Zenlora!*\n"
+                                f"We truly appreciate your trust and hope your day goes absolutely amazing! 🌟\n"
+                                f"— *Team Zenlora* 🛍️"
+                            )
+                            send_whatsapp_message(sender_phone, reply)
+
+                        # Option C: User clicked "Cancel Order"
+                        elif "btn_cancel" in btn_id:
+                            reply = (
+                                f"We completely understand, {sender_name}. 💙\n\n"
+                                f"Your order has been cancelled immediately as requested. You will NOT be contacted by any delivery executive.\n\n"
+                                f"We would love to welcome you back whenever you're ready! Here is an exclusive gift voucher just for you:\n"
+                                f"🎁 Code: *VIPZEN10* (Flat 10% OFF on your next purchase at zenlora.store)\n\n"
+                                f"─────────────────\n"
+                                f"✨ *Thank you for considering Zenlora!*\n"
+                                f"I hope your day goes wonderful and smiling! ✨\n"
+                                f"— *Team Zenlora* 🛍️"
+                            )
+                            send_whatsapp_message(sender_phone, reply)
+
+                    # 2. Text Message
+                    elif msg_type == "text":
+                        reply = (
+                            f"Hello {sender_name}! 👋\n\n"
+                            f"Thank you for contacting *Zenlora Store Support*.\n"
+                            f"How can we assist you with your orders or shopping today?\n\n"
+                            f"Explore our trending lifestyle collection: https://zenlora.store\n\n"
+                            f"✨ *Thank you for choosing Zenlora!*\n"
+                            f"I hope your day goes amazing and filled with joy! 🌟\n"
+                            f"— *Team Zenlora* 🛍️"
+                        )
+                        send_whatsapp_message(sender_phone, reply)
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        logger.error(f"Error handling webhook: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Fatal error handling webhook: {e}", exc_info=True)
+        # Always return 200 to Meta so it does not disable the webhook
+        return jsonify({"status": "handled_with_error", "error": str(e)}), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
