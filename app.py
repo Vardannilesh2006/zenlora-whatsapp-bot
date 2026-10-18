@@ -61,18 +61,21 @@ def send_interactive_order_confirmation(to_phone, customer_name, order_id, produ
     prepaid_val = cod_val - savings
 
     body_text = (
-        f"Hi *{customer_name}!* 👋\n\n"
-        f"Your order has been confirmed with Zenlora.\n\n"
-        f"*🔖 Order #ZEN-{order_id}*\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"📦 {product_name}\n"
-        f"━━━━━━━━━━━━━━━━\n\n"
-        f"🟡 *COD:* Pay ₹{cod_val} at doorstep\n"
-        f"🟢 *Online:* Pay only ₹{prepaid_val} — Save 15%\n"
-        f"   ✅ Free shipping  ✅ Priority dispatch\n"
-        f"   ⏱️ Offer valid for 15 mins only\n\n"
-        f"─────────────────\n"
-        f"✨ Zenlora | zenlora.store"
+        f"Hi {customer_name}! 👋\n\n"
+        f"Thank you for shopping with *Zenlora*. Your order has been placed successfully!\n\n"
+        f"────────────────────────\n"
+        f"📦 *Order Summary*\n"
+        f"• *Order ID:* #ZEN-{order_id}\n"
+        f"• *Product:* {product_name}\n"
+        f"• *COD Amount:* ₹{cod_val}\n"
+        f"────────────────────────\n\n"
+        f"⚡ *Prepaid Privilege Offer:*\n"
+        f"Pay online now & get *Flat 15% OFF*\n"
+        f"• *Payable Amount:* ₹{prepaid_val} (Save ₹{savings})\n"
+        f"• *Free Express Delivery* & priority 24h dispatch\n"
+        f"• Contactless & 1-tap UPI payment\n\n"
+        f"⏱️ _Offer valid for the next 15 minutes._\n\n"
+        f"Please choose how you would like to proceed:"
     )
 
     payload = {
@@ -142,15 +145,17 @@ def send_interactive_ofd_check(to_phone, customer_name, order_id, product_name, 
     cod_val = int(cod_amount)
 
     body_text = (
-        f"Your *zenlora.store* order is out for delivery today. 🚚\n\n"
-        f"📦 *Item:* {product_name}\n"
-        f"🔖 *Order:* #ZEN-{order_id}\n\n"
-        f"💵 Kindly pay *₹{cod_val}* for your cash on delivery order.\n\n"
-        f"To help us deliver on time, please confirm you can collect the order today between *9 am - 8 pm*.\n\n"
-        f"📞 *Delivery Helpline:* {contact_phone}\n"
-        f"🔐 *Security PIN:* {pin}\n\n"
-        f"─────────────────\n"
-        f"✨ Zenlora | zenlora.store"
+        f"🚚 *Out For Delivery Today!*\n\n"
+        f"Hi {customer_name}, your Zenlora order is arriving today!\n\n"
+        f"────────────────────────\n"
+        f"📦 *Shipment Details*\n"
+        f"• *Order ID:* #ZEN-{order_id}\n"
+        f"• *Product:* {product_name}\n"
+        f"• *COD to Pay:* ₹{cod_val}\n"
+        f"• *Security PIN:* {pin}\n"
+        f"────────────────────────\n\n"
+        f"To ensure seamless delivery, please confirm if you will be available to collect your order today between *9:00 AM – 8:00 PM*.\n\n"
+        f"📞 *Delivery Helpline:* {contact_phone}"
     )
 
     payload = {
@@ -199,32 +204,62 @@ def send_interactive_ofd_check(to_phone, customer_name, order_id, product_name, 
         return None
 
 def create_razorpay_payment_link(original_amount_inr, customer_name, customer_phone, order_ref="ZEN-1001", discount_pct=15):
-    """Creates a 1-tap dynamic payment link via Razorpay API with exact 15% discount applied"""
+    """Creates a 1-tap dynamic payment link via Razorpay API with exact 15% discount applied and locked readonly contact for direct UPI checkout"""
     try:
         discount_amount = round(original_amount_inr * (discount_pct / 100.0))
         payable_amount = original_amount_inr - discount_amount
         amount_in_paise = int(payable_amount * 100)
+
+        # Sanitize customer phone to clean 10-digit number
+        clean_digits = "".join(ch for ch in str(customer_phone) if ch.isdigit())
+        clean_phone_10 = clean_digits[-10:] if len(clean_digits) >= 10 else "9608837916"
+        clean_contact = f"+91{clean_phone_10}"
+
+        clean_cust_name = str(customer_name).strip()
+        if not clean_cust_name or clean_cust_name.lower() in ["there", "customer", "valued customer"]:
+            clean_cust_name = "Zenlora Customer"
+
+        customer_email = f"order_{clean_phone_10}@zenlora.store"
 
         url = "https://api.razorpay.com/v1/payment_links"
         payload = {
             "amount": amount_in_paise,
             "currency": "INR",
             "accept_partial": False,
-            "description": f"Zenlora Order #{order_ref} - Flat {discount_pct}% VIP Prepaid Discount",
+            "description": f"Zenlora #{order_ref} - Flat {discount_pct}% Prepaid Discount",
             "customer": {
-                "name": customer_name,
-                "contact": customer_phone
+                "name": clean_cust_name,
+                "contact": clean_contact,
+                "email": customer_email
             },
             "notify": {
                 "sms": False,
                 "email": False
             },
             "reminder_enable": False,
+            "upi_link": True,
+            "options": {
+                "checkout": {
+                    "name": "Zenlora Store",
+                    "prefill": {
+                        "contact": clean_contact,
+                        "email": customer_email,
+                        "method": "upi"
+                    },
+                    "readonly": {
+                        "contact": True,
+                        "email": True,
+                        "name": True
+                    }
+                }
+            },
             "notes": {
                 "policy": f"Flat {discount_pct}% Instant Prepaid Privilege",
+                "order_ref": str(order_ref),
                 "original_cod_amount": f"Rs {original_amount_inr}",
                 "discount_saved": f"Rs {discount_amount}",
                 "final_paid": f"Rs {payable_amount}",
+                "customer_phone": clean_contact,
                 "store": "Zenlora Store"
             }
         }
@@ -233,7 +268,7 @@ def create_razorpay_payment_link(original_amount_inr, customer_name, customer_ph
         if res.status_code in [200, 201]:
             data = res.json()
             short_url = data.get("short_url")
-            logger.info(f"Generated Razorpay link: {short_url} for Rs {payable_amount}")
+            logger.info(f"Generated Razorpay link: {short_url} for Rs {payable_amount} (phone {clean_contact})")
             return short_url, payable_amount, discount_amount
         else:
             logger.error(f"Razorpay API Error: {res.text}")
@@ -490,11 +525,15 @@ def handle_incoming_messages():
                             cod_val = parts[3]
 
                         reply = (
-                            f"🎉 *Thank you for confirming, {sender_name}!* 🚚\n\n"
-                            f"Your delivery partner has been notified that you are available to collect the order today!\n\n"
-                            f"💵 Kindly keep *₹{cod_val}* ready in cash or via UPI at doorstep.\n\n"
-                            f"📦 We hope you love your Zenlora purchase!\n\n"
-                            f"─────────────────\n"
+                            f"🎉 *Delivery Confirmed, {sender_name}!* 🚚\n\n"
+                            f"Thank you! We have notified your delivery partner that you are available to collect your order today.\n\n"
+                            f"────────────────────────\n"
+                            f"📦 *Delivery Summary*\n"
+                            f"• *Amount to Pay:* ₹{cod_val} (Cash or UPI at doorstep)\n"
+                            f"• *Delivery Window:* Today (9:00 AM – 8:00 PM)\n"
+                            f"────────────────────────\n\n"
+                            f"Please keep the amount or your UPI app ready for quick, contactless handover.\n\n"
+                            f"────────────────────────\n"
                             f"✨ *Thank you for choosing Zenlora!*\n"
                             f"I hope your day goes amazing and filled with joy! 😊\n"
                             f"— *Team Zenlora* 🛍️"
@@ -508,9 +547,14 @@ def handle_incoming_messages():
                     elif "resched" in action_str or "change the date" in action_str or "date" in action_str:
                         reply = (
                             f"🗓️ *Delivery Rescheduled Successfully!* ⏱️\n\n"
-                            f"No worries at all, {sender_name}! We have updated your preference with our courier delivery partner so you don't face any inconvenience.\n\n"
-                            f"Your delivery attempt has been rescheduled for *Tomorrow*. The delivery partner will contact you prior to arrival.\n\n"
-                            f"─────────────────\n"
+                            f"No worries at all, {sender_name}! We have updated your preference with our delivery partner so you don't face any inconvenience.\n\n"
+                            f"────────────────────────\n"
+                            f"📦 *Rescheduled Details*\n"
+                            f"• *New Delivery Date:* Tomorrow\n"
+                            f"• *Delivery Slot:* 9:00 AM – 8:00 PM\n"
+                            f"────────────────────────\n\n"
+                            f"The delivery partner will call you prior to arrival tomorrow.\n\n"
+                            f"────────────────────────\n"
                             f"✨ *Thank you for choosing Zenlora!*\n"
                             f"I hope your day goes amazing and filled with joy! 😊\n"
                             f"— *Team Zenlora* 🛍️"
@@ -525,8 +569,10 @@ def handle_incoming_messages():
                         parts = btn_id.split("_")
                         original_cod = 349
                         order_ref = "ZEN-1001"
+                        order_num = "1001"
                         if len(parts) >= 4:
-                            order_ref = f"ZEN-{parts[2]}"
+                            order_num = parts[2]
+                            order_ref = f"ZEN-{order_num}"
                             try:
                                 original_cod = int(parts[3])
                             except:
@@ -541,15 +587,22 @@ def handle_incoming_messages():
                         )
 
                         reply = (
-                            f"🎉 *Fantastic choice, {sender_name}!* ⚡\n\n"
-                            f"You have unlocked *FLAT 15% Instant Savings*!\n"
-                            f"• Original COD Price: ~₹{original_cod}~\n"
-                            f"• *Discounted Amount:* ₹{payable_amt} *(You save ₹{saved_amt}!)*\n\n"
-                            f"👉 *Tap below to pay securely via Google Pay / PhonePe / Paytm / UPI:*\n"
+                            f"🎉 *Prepaid Privilege Unlocked, {sender_name}!* ⚡\n\n"
+                            f"Your *Flat 15% Instant Discount* has been applied to Order #ZEN-{order_num}.\n\n"
+                            f"────────────────────────\n"
+                            f"💰 *Payment Summary*\n"
+                            f"• *Original COD:* ~₹{original_cod}~\n"
+                            f"• *Discount Applied:* -₹{saved_amt} (Flat 15% OFF)\n"
+                            f"• *Payable Amount:* ₹{payable_amt}\n"
+                            f"────────────────────────\n\n"
+                            f"👉 *Tap link below to pay directly via UPI / PhonePe / GPay:*\n"
                             f"🔗 {rzp_link}\n\n"
-                            f"⏱️ *Offer validity:* 15 minutes only.\n"
-                            f"Once payment is completed, your package receives *Priority 24h Express Dispatch*! 🚀\n\n"
-                            f"─────────────────\n"
+                            f"⚡ *Prepaid Benefits:*\n"
+                            f"• 1-Tap direct UPI checkout (No manual phone/email required)\n"
+                            f"• Instant order confirmation & 24h priority packaging\n"
+                            f"• Contactless & hassle-free delivery\n\n"
+                            f"⏱️ _Discounted payment link is valid for 15 minutes only._\n\n"
+                            f"────────────────────────\n"
                             f"✨ *Thank you for choosing Zenlora!*\n"
                             f"I hope your day goes amazing and filled with joy! 😊\n"
                             f"— *Team Zenlora* 🛍️"
@@ -561,13 +614,24 @@ def handle_incoming_messages():
 
                     # Option 4: "Confirm COD"
                     elif "btn_cod" in action_str or "confirm cod" in action_str or "confirm" in action_str:
+                        order_num = "1001"
+                        parts = btn_id.split("_")
+                        if len(parts) >= 3:
+                            order_num = parts[2]
+
                         reply = (
-                            f"✅ *Order Successfully Confirmed!* 📦\n\n"
-                            f"Thank you, {sender_name}! Your Cash on Delivery order is now confirmed and prioritized.\n\n"
+                            f"✅ *Order Confirmed for COD Delivery!* 📦\n\n"
+                            f"Thank you, {sender_name}! Your Cash on Delivery order has been verified and prioritized for dispatch.\n\n"
+                            f"────────────────────────\n"
+                            f"📦 *Order Status*\n"
+                            f"• *Order ID:* #ZEN-{order_num}\n"
+                            f"• *Payment Mode:* Cash on Delivery\n"
+                            f"• *Status:* Priority Packaging & Dispatch\n"
+                            f"────────────────────────\n\n"
                             f"Our fulfillment team is packaging your item with extreme care. You will receive live tracking updates right here on WhatsApp the moment it leaves our warehouse! 🚚\n\n"
-                            f"─────────────────\n"
+                            f"────────────────────────\n"
                             f"✨ *Thank you for choosing Zenlora!*\n"
-                            f"We truly appreciate your trust and hope your day goes absolutely amazing! 🌟\n"
+                            f"I hope your day goes amazing and filled with joy! 😊\n"
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
@@ -577,14 +641,23 @@ def handle_incoming_messages():
 
                     # Option 5: "Cancel Order"
                     elif "btn_cancel" in action_str or "cancel" in action_str:
+                        order_num = "1001"
+                        parts = btn_id.split("_")
+                        if len(parts) >= 3:
+                            order_num = parts[2]
+
                         reply = (
-                            f"We completely understand, {sender_name}. 💙\n\n"
-                            f"Your order has been cancelled immediately as requested. You will NOT be contacted by any delivery executive.\n\n"
-                            f"We would love to welcome you back whenever you're ready! Here is an exclusive gift voucher just for you:\n"
-                            f"🎁 Code: *VIPZEN10* (Flat 10% OFF on your next purchase at zenlora.store)\n\n"
-                            f"─────────────────\n"
-                            f"✨ *Thank you for considering Zenlora!*\n"
-                            f"I hope your day goes wonderful and smiling! ✨\n"
+                            f"❌ *Order Cancellation Confirmed*\n\n"
+                            f"Hello {sender_name}, your order #ZEN-{order_num} has been cancelled as requested. You will NOT be contacted by any delivery executive.\n\n"
+                            f"We would love to welcome you back whenever you're ready!\n\n"
+                            f"────────────────────────\n"
+                            f"🎁 *Exclusive Courtesy Gift Voucher:*\n"
+                            f"• Code: *VIPZEN10*\n"
+                            f"• Benefit: Flat 10% OFF on your next purchase at zenlora.store\n"
+                            f"────────────────────────\n\n"
+                            f"────────────────────────\n"
+                            f"✨ *Thank you for choosing Zenlora!*\n"
+                            f"I hope your day goes amazing and filled with joy! 😊\n"
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
@@ -596,11 +669,12 @@ def handle_incoming_messages():
                     else:
                         reply = (
                             f"Hello {sender_name}! 👋\n\n"
-                            f"Thank you for contacting *Zenlora Store Support*.\n"
+                            f"Thank you for reaching out to *Zenlora Store Support*.\n"
                             f"How can we assist you with your orders or shopping today?\n\n"
-                            f"Explore our trending lifestyle collection: https://zenlora.store\n\n"
+                            f"🌐 Visit our official store: https://zenlora.store\n\n"
+                            f"────────────────────────\n"
                             f"✨ *Thank you for choosing Zenlora!*\n"
-                            f"I hope your day goes amazing and filled with joy! 🌟\n"
+                            f"I hope your day goes amazing and filled with joy! 😊\n"
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
