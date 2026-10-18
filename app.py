@@ -278,6 +278,8 @@ def create_razorpay_payment_link(original_amount_inr, customer_name, customer_ph
         return "https://zenlora.store", 297, 52
 
 @app.route("/", methods=["GET"])
+@app.route("/zenos", methods=["GET"])
+@app.route("/cockpit", methods=["GET"])
 @app.route("/dashboard", methods=["GET"])
 def render_cockpit():
     """Renders the Hallmark-compliant ZenOS Founder Cockpit"""
