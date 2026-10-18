@@ -2,13 +2,17 @@ import os
 import json
 import logging
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
+from db import init_db, get_dashboard_data, save_or_update_order, update_order_status, record_message, log_event
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Initialize ZenOS Database
+init_db()
 
 # Configurations
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "zenlora_secret_token_2026")
@@ -239,12 +243,92 @@ def create_razorpay_payment_link(original_amount_inr, customer_name, customer_ph
         return "https://zenlora.store", 297, 52
 
 @app.route("/", methods=["GET"])
+@app.route("/dashboard", methods=["GET"])
+def render_cockpit():
+    """Renders the Hallmark-compliant ZenOS Founder Cockpit"""
+    return render_template("dashboard.html")
+
+@app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({
         "status": "live",
-        "service": "Zenlora WhatsApp RTO Killer Engine",
+        "service": "ZenOS Founder Cockpit & Automation Engine",
         "razorpay_connected": bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
     }), 200
+
+@app.route("/api/dashboard/data", methods=["GET"])
+def fetch_dashboard_metrics():
+    """Returns real-time KPIs, orders, and logs from SQLite"""
+    try:
+        data = get_dashboard_data()
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"Error fetching dashboard data: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/dashboard/action", methods=["POST"])
+def execute_dashboard_action():
+    """Triggered by 1-click action buttons on the ZenOS Cockpit"""
+    try:
+        req = request.get_json(force=True)
+        action = req.get("action")
+        order_ref = req.get("order_ref", "ZEN-1001")
+        
+        from db import get_db
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM orders WHERE order_ref = ?", (order_ref,))
+        order = cursor.fetchone()
+        conn.close()
+
+        if not order:
+            return jsonify({"status": "error", "message": f"Order {order_ref} not found"}), 404
+
+        order_dict = dict(order)
+        phone = order_dict["phone"]
+        cust_name = order_dict["customer_name"]
+        amt = order_dict["amount"]
+        item = order_dict["product_name"]
+
+        if action == "order":
+            res = send_interactive_order_confirmation(phone, cust_name, order_ref.replace("ZEN-", ""), item, amt)
+            log_event("SUCCESS", "DASHBOARD", f"Manually resent Order Confirmation to {cust_name} ({phone})")
+            return jsonify({"status": "success", "message": f"WhatsApp Order Confirmation sent to {cust_name}!"}), 200
+        
+        elif action == "ofd":
+            res = send_interactive_ofd_check(phone, cust_name, order_ref.replace("ZEN-", ""), item, amt)
+            update_order_status(order_ref, "OUT_FOR_DELIVERY")
+            log_event("SUCCESS", "DASHBOARD", f"Manually triggered Out For Delivery check to {cust_name} ({phone})")
+            return jsonify({"status": "success", "message": f"Out For Delivery check sent to {cust_name}!"}), 200
+
+        elif action == "wukusy":
+            update_order_status(order_ref, order_dict["status"], {"wukusy_status": "SYNCED_QUEUE"})
+            log_event("SUCCESS", "WUKUSY", f"Order {order_ref} staged for 1-Click Wukusy fulfillment.")
+            return jsonify({"status": "success", "message": f"Order {order_ref} staged for Wukusy fulfillment!"}), 200
+
+        return jsonify({"status": "error", "message": "Unknown action"}), 400
+
+    except Exception as e:
+        logger.error(f"Error executing action: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/dashboard/chat/send", methods=["POST"])
+def send_admin_chat_reply():
+    """Allows founder/admin to send direct WhatsApp messages from cockpit"""
+    try:
+        req = request.get_json(force=True)
+        phone = req.get("phone")
+        msg = req.get("message")
+        if not phone or not msg:
+            return jsonify({"status": "error", "message": "Phone and message are required"}), 400
+
+        result = send_whatsapp_message(phone, msg)
+        record_message(phone, "Customer", "OUTBOUND", "TEXT", msg)
+        log_event("INFO", "LIVE_CHAT", f"Admin sent direct message to {phone}: '{msg[:40]}...'")
+        return jsonify({"status": "success", "result": result}), 200
+    except Exception as e:
+        logger.error(f"Error sending admin chat: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/api/order-webhook", methods=["POST"])
 def handle_store_order():
@@ -255,13 +339,18 @@ def handle_store_order():
 
         customer_name = data.get("customer_name", "Valued Customer")
         phone = data.get("phone")
-        order_id = data.get("order_id", "1001")
+        order_id = str(data.get("order_id", "1001"))
         product_name = data.get("product_name", "Zenlora Lifestyle Item")
         amount = data.get("amount", 349)
 
         if not phone:
             return jsonify({"status": "error", "message": "Phone number is required"}), 400
 
+        # Save to ZenOS Database
+        data["status"] = "PENDING_VERIFICATION"
+        save_or_update_order(data)
+
+        # Trigger WhatsApp Confirmation
         result = send_interactive_order_confirmation(
             to_phone=phone,
             customer_name=customer_name,
@@ -269,10 +358,14 @@ def handle_store_order():
             product_name=product_name,
             cod_amount=amount
         )
+
+        record_message(phone, customer_name, "OUTBOUND", "INTERACTIVE_ORDER", f"Order #{order_id} confirmation sent with 15% discount option")
+
         return jsonify({"status": "success", "result": result}), 200
 
     except Exception as e:
         logger.error(f"Error processing store order: {e}")
+        log_event("ERROR", "SMARTBIZ", f"Failed to ingest order: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/api/ofd-webhook", methods=["POST"])
@@ -302,10 +395,16 @@ def handle_ofd_trigger():
             contact_phone=helpline,
             pin=pin
         )
+
+        update_order_status(phone, "OUT_FOR_DELIVERY")
+        record_message(phone, customer_name, "OUTBOUND", "INTERACTIVE_OFD", f"Out For Delivery check sent for Order #{order_id}")
+        log_event("SUCCESS", "WHATSAPP", f"Out For Delivery check sent to {customer_name} ({phone})")
+
         return jsonify({"status": "success", "result": result}), 200
 
     except Exception as e:
         logger.error(f"Error processing OFD check: {e}")
+        log_event("ERROR", "WHATSAPP", f"Error sending OFD check: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/webhook", methods=["GET"])
@@ -380,6 +479,9 @@ def handle_incoming_messages():
                     action_str = f"{btn_id} {button_text} {text_body}".lower().strip()
                     logger.info(f"Action string resolved: '{action_str}' from {sender_phone}")
 
+                    # Record Inbound Message
+                    record_message(sender_phone, sender_name, "INBOUND", msg_type, text_body or button_text or action_str, btn_id)
+
                     # Option 1: "I can collect" / Availability Confirmed
                     if "collect" in action_str:
                         cod_val = "349"
@@ -398,6 +500,9 @@ def handle_incoming_messages():
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
+                        update_order_status(sender_phone, "DELIVERY_COLLECT_CONFIRMED")
+                        record_message(sender_phone, sender_name, "OUTBOUND", "TEXT", "Delivery collection confirmed reply sent")
+                        log_event("SUCCESS", "WHATSAPP", f"Customer {sender_name} confirmed OFD collection today!")
 
                     # Option 2: "Change the date" / Reschedule
                     elif "resched" in action_str or "change the date" in action_str or "date" in action_str:
@@ -411,6 +516,9 @@ def handle_incoming_messages():
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
+                        update_order_status(sender_phone, "DELIVERY_RESCHEDULED")
+                        record_message(sender_phone, sender_name, "OUTBOUND", "TEXT", "Delivery reschedule reply sent")
+                        log_event("WARNING", "WHATSAPP", f"Customer {sender_name} rescheduled delivery for tomorrow.")
 
                     # Option 3: "Pay & Save 15%"
                     elif "btn_pay" in action_str or "pay" in action_str or "save 15" in action_str or "save" in action_str:
@@ -447,6 +555,9 @@ def handle_incoming_messages():
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
+                        update_order_status(sender_phone, "PREPAID_PENDING_LINK", {"razorpay_link": rzp_link, "prepaid_amount": payable_amt, "discount_amount": saved_amt})
+                        record_message(sender_phone, sender_name, "OUTBOUND", "TEXT", f"15% Discount Razorpay link {rzp_link} sent")
+                        log_event("SUCCESS", "RAZORPAY", f"Prepaid link generated for {sender_name} (₹{payable_amt}). Saved ₹{saved_amt} risk!")
 
                     # Option 4: "Confirm COD"
                     elif "btn_cod" in action_str or "confirm cod" in action_str or "confirm" in action_str:
@@ -460,6 +571,9 @@ def handle_incoming_messages():
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
+                        update_order_status(sender_phone, "CONFIRMED_COD")
+                        record_message(sender_phone, sender_name, "OUTBOUND", "TEXT", "COD confirmation reply sent")
+                        log_event("SUCCESS", "WHATSAPP", f"Order confirmed COD by {sender_name}. Queued for dispatch.")
 
                     # Option 5: "Cancel Order"
                     elif "btn_cancel" in action_str or "cancel" in action_str:
@@ -474,6 +588,9 @@ def handle_incoming_messages():
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
+                        update_order_status(sender_phone, "CANCELLED")
+                        record_message(sender_phone, sender_name, "OUTBOUND", "TEXT", "Cancellation response and voucher VIPZEN10 sent")
+                        log_event("WARNING", "WHATSAPP", f"Order cancelled by {sender_name}. Prevented ₹90 forward/reverse courier loss!")
 
                     # Option 6: General Text / Store Support
                     else:
@@ -487,6 +604,8 @@ def handle_incoming_messages():
                             f"— *Team Zenlora* 🛍️"
                         )
                         send_whatsapp_message(sender_phone, reply)
+                        record_message(sender_phone, sender_name, "OUTBOUND", "TEXT", reply)
+                        log_event("INFO", "WHATSAPP", f"Store support auto-reply sent to {sender_phone}.")
 
         return jsonify({"status": "success"}), 200
 
